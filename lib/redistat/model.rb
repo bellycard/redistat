@@ -5,12 +5,20 @@ module Redistat
 
       def increment(params)
         key_data = fill_keys_for_update(params)
-        Redistat::ScriptManager.hmincrby(key_data[0], key_data[1].unshift(1))
+        if @_type == :unique
+          adjust_unique_counter(params, key_data[0], 1)
+        else
+          Redistat::ScriptManager.hmincrby(key_data[0], key_data[1].unshift(1))
+        end
       end
 
       def decrement(params)
         key_data = fill_keys_for_update(params)
-        Redistat::ScriptManager.hmincrby(key_data[0], key_data[1].unshift(-1))
+        if @_type == :unique
+          adjust_unique_counter(params, key_data[0], 0)
+        else
+          Redistat::ScriptManager.hmincrby(key_data[0], key_data[1].unshift(-1))
+        end
       end
 
       # Retrieving
@@ -36,7 +44,14 @@ module Redistat
           argv << index(id)
         end
 
-        result = Redistat::ScriptManager.hmfind(keys, argv)
+        if @_type == :unique
+          argv = []
+          argv << unique_ids_key
+          argv << params[:unique_id]
+          result = Redistat::ScriptManager.mgetbit(keys, argv)
+        else
+          result = Redistat::ScriptManager.hmfind(keys, argv)
+        end
 
         # If only for a single id, just return the value rather than an array
         if result.size == 1
@@ -166,7 +181,11 @@ module Redistat
             timestamp = formatted_timestamp(params[:timestamp], interval) if interval.present?
             key += "#{timestamp}:"
           end
-          key + "#{bucket(params[:id])}"
+          if @_type == :counter
+            key + "#{bucket(params[:id])}"
+          else
+            key + "#{params[:id]}"
+          end
         end
 
         def formatted_timestamp(timestamp, interval)
@@ -219,6 +238,21 @@ module Redistat
         def id_param_to_array(param_id)
           ids = []
           param_id.is_a?(Array) ? ids = param_id : ids << param_id
+        end
+
+        def unique_ids_key
+          key = ''
+          key += "#{Redistat::Connection.namespace}:" if Redistat::Connection.namespace.present?
+          key += "#{model_name}:"
+          key + 'unique_ids'
+        end
+
+        def adjust_unique_counter(params, keys, value)
+          args = []
+          args << unique_ids_key
+          args << value
+          args << params[:unique_id]
+          Redistat::ScriptManager.msetbit(keys, args)
         end
     end
   end

@@ -353,4 +353,120 @@ describe Redistat::Model do
       end
     end
   end
+
+  context 'unique counter' do
+    before do
+      class Customers < Redistat::Model
+        type :unique
+        resolution :days
+      end
+      @id                 = 1001
+      @timestamp          = '2014-01-05'
+      @user1              = 4321
+      @user2              = 8765
+      @day_key            = 'app1:customers:2014-01-05:1001'
+      @week_key           = 'app1:customers:2014-W1:1001'
+      @month_key          = 'app1:customers:2014-01:1001'
+      @year_key           = 'app1:customers:2014:1001'
+    end
+
+    describe '#increment' do
+      context 'single ids' do
+        before do
+          Customers.increment(id: @id, timestamp: @timestamp, unique_id: @user1)
+          Customers.increment(id: @id, timestamp: @timestamp, unique_id: @user2)
+        end
+
+        it 'increments user1 by setting the bit at index 0 to 1' do
+          expect(Redistat::Connection.redis.getbit(@day_key, 0)).to eq(1)
+        end
+
+        it 'increments user2 by setting the bit at index 1 to 1' do
+          expect(Redistat::Connection.redis.getbit(@day_key, 1)).to eq(1)
+        end
+
+        it 'increments the bit on the week key' do
+          expect(Redistat::Connection.redis.getbit(@week_key, 0)).to eq(1)
+        end
+
+        it 'increments the bit on the month key' do
+          expect(Redistat::Connection.redis.getbit(@month_key, 0)).to eq(1)
+        end
+
+        it 'increments the bit on the year key' do
+          expect(Redistat::Connection.redis.getbit(@year_key, 0)).to eq(1)
+        end
+      end
+
+      context 'multiple ids' do
+        before do
+          ids = [1001, 1002]
+          Customers.increment(id: ids, timestamp: @timestamp, unique_id: @user1)
+        end
+
+        it 'increments bits on both keys' do
+          expect(Redistat::Connection.redis.getbit(@day_key, 0)).to eq(1)
+          expect(Redistat::Connection.redis.getbit('app1:customers:2014-01-05:1002', 0)).to eq(1)
+        end
+      end
+    end
+
+    describe '#decrement' do
+      before do
+        # First set the bit to 1
+        Redistat::Connection.redis.setbit(@day_key, 0, 1)
+      end
+
+      it 'decrements user1 by setting the bit at index 0 to 0' do
+        # Make sure it was properly set to 1 first
+        expect(Redistat::Connection.redis.getbit(@day_key, 0)).to eq(1)
+        Customers.decrement(id: @id, timestamp: @timestamp, unique_id: @user1)
+        expect(Redistat::Connection.redis.getbit(@day_key, 0)).to eq(0)
+      end
+    end
+
+    describe '#find' do
+      context 'single ids' do
+        before do
+          Customers.increment(id: @id, timestamp: @timestamp, unique_id: @user1)
+        end
+
+        it 'finds the value for a unique id on a single day' do
+          expect(Customers.find(id: @id, year: 2014, month: 1, day: 5, unique_id: @user1)).to eq(1)
+          expect(Customers.find(id: @id, year: 2014, month: 1, day: 5, unique_id: 1)).to eq(0)
+        end
+
+        it 'finds the value for a unique id in a single week' do
+          expect(Customers.find(id: @id, year: 2014, week: 1, unique_id: @user1)).to eq(1)
+          expect(Customers.find(id: @id, year: 2014, week: 1, unique_id: 1)).to eq(0)
+        end
+
+        it 'finds the value for a unique id in a single month' do
+          expect(Customers.find(id: @id, year: 2014, month: 1, unique_id: @user1)).to eq(1)
+          expect(Customers.find(id: @id, year: 2014, month: 1, unique_id: 1)).to eq(0)
+        end
+
+        it 'finds the value for a unique id in a single year' do
+          expect(Customers.find(id: @id, year: 2014, unique_id: @user1)).to eq(1)
+          expect(Customers.find(id: @id, year: 2014, unique_id: 1)).to eq(0)
+        end
+      end
+
+      context 'mutiple ids' do
+        before do
+          2.times { Customers.increment(id: 1001, timestamp: @timestamp, unique_id: @user1) }
+          Customers.increment(id: 1002, timestamp: @timestamp, unique_id: @user1)
+        end
+
+        it 'returns an array of the values for each id' do
+          expected_result = [1, 1, 0]
+          params = { id: [1001, 1002, 1003], year: 2014, month: 1, day: 5, unique_id: @user1 }
+          expect(Customers.find(params)).to eq(expected_result)
+        end
+      end
+    end
+
+    describe '#aggregate' do
+    end
+  end
 end
